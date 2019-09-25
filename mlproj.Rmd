@@ -1,0 +1,114 @@
+---
+title: "qualitative activity recognition"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Overview
+In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [link](http://groupware.les.inf.puc-rio.br/har)
+
+### Data
+The training data for this project are available here:
+
+[training Data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+The test data are available here:
+
+[testing Data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+
+### Model selection
+
+I first studied the data and other similar projects which mostly have used random forests as their cassifier model. On the average I saw 94% of accuracy in models so It was already guaranteed that using Random Forests will lead to a great result.
+**But** I decided to use gradient boosting machines >> **GBM** 
+doing some research I found out that there's a boosted version of GBM package in R named XGBoost (extreme gradiend boosting machies),
+
+let's jump to code part which I'm excited about:
+
+### Code 
+
+#### load data and cleaning:
+```{r}
+  library(xgboost) ; library(caret)
+  training_data <- read.csv(file = "./pml-training.csv")
+  testing_data  <- read.csv(file = "./pml-testing.csv")
+  
+  trdata <- training_data[-c(1:7)] ; tsdata <- testing_data[-c(1:7)] 
+  
+  trdata <- trdata[,!apply(trdata , 2 , function(x) any(is.na(x)))] ;
+  tsdata <- tsdata[,!apply(tsdata , 2 , function(x) any(is.na(x)))] ;
+  trdata <- trdata[ , !apply(trdata, 2, function(x) any(x==""))]    ;
+  tsdata <- tsdata[ , !apply(tsdata, 2, function(x) any(x==""))]    ;
+```
+
+#### preparing for XGBoost
+
+xgboost asks us to provide it with a splitted version of our dataframe. main data and labels!
+
+```{r}
+ classes <- trdata$classe
+  classes_num <- as.numeric(classes) - 1
+  trdata = subset(trdata , select = -classe)
+  #-----------------------
+  # 25-75 partition
+  trind <- createDataPartition(trdata$roll_belt , p = 0.75 ,list = F)
+  data.tr <- trdata[trind,] 
+  data.tr.label <- classes_num[trind]
+  data.ts <- trdata[-trind,]
+  data.ts.label <- classes_num[-trind]
+  #-----------------------
+  xg.tr <- xgb.DMatrix(data = as.matrix(data.tr), label = data.tr.label)
+  xg.ts <- xgb.DMatrix(data = as.matrix(data.ts), label = data.ts.label)
+```
+
+#### parametr tuning for model trainig:
+
+the important part in this parametrs is max_depth which will decide the depth of the trees in your model each time. for less complex data; say `iris` you won't need more than 2 :)
+The objective parameter decides the result type. using softmax, xgboost will give you the class with the most probability, you can use softprob instead if you want to have the probabilities of all classes.
+
+```{r}
+  num_classes <- length(levels(factor((classes_num))))
+  params = list(
+    booster = "gbtree",
+    eval_metric="mlogloss",
+    max_depth = 10,
+    objective = "multi:softmax",
+    num_class = num_classes)
+```
+
+#### training model:
+
+```{r}
+xgb.fit <- xgb.train(
+    params = params,
+    data = xg.tr,
+    nrounds =  100,
+    nthreads = 6,
+    verbose = 0
+  ) 
+```
+
+#### prediction and accuracy :
+
+```{r}
+xg.pred <- predict(xgb.fit, newdata = as.matrix(data.ts), reshape = T )
+prediction.df <- data.frame(test.label = data.ts.label , model.label = xg.pred)
+accuracy = length(which(prediction.df$test.label == prediction.df$model.label))/nrow(prediction.df)
+table(prediction.df$test.label , prediction.df$model.label)
+```
+
+with this accuracy rate on our test sample : `r accuracy` <br>
+let's jump to the testing data and classify it to fullfill the project task.
+
+```{r}
+xg.tsdata.pred <- predict(xgb.fit,newdata =  as.matrix(tsdata[,-53]))
+res <- levels(classes)[xg.tsdata.pred + 1]
+id  <- tsdata$problem_id
+df  <- data.frame(id = id , result = res)
+kable(df, caption = "test results")
+```
+
+
